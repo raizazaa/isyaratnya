@@ -121,7 +121,9 @@ namespace Sign {
         public Vector3 Hand() => CheckHand() ? (ConvertToVector3(m1) - ConvertToVector3(h)).normalized : Vector3.zero;
         public Vector3 HandFacing() => CheckHand() ? GetHandFacing() : Vector3.zero;
         
-        public Vector3 ThumbFacing() => (ConvertToVector3(i1) - ConvertToVector3(t1)).normalized;
+        public Vector3 ThumbFacing1() => (ConvertToVector3(i1) - ConvertToVector3(t1)).normalized;
+        public Vector3 ThumbFacing2() => (ConvertToVector3(i1) - ConvertToVector3(t2)).normalized;
+        public Vector3 ThumbFacing3() => (ConvertToVector3(i1) - ConvertToVector3(t3)).normalized;
         public Vector3 Thumb1() => (ConvertToVector3(t2) - ConvertToVector3(t1)).normalized;
         public Vector3 Thumb2() => (ConvertToVector3(t3) - ConvertToVector3(t2)).normalized;
         public Vector3 Thumb3() => (ConvertToVector3(t4) - ConvertToVector3(t3)).normalized;

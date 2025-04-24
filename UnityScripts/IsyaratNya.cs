@@ -1,7 +1,5 @@
-using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using UnityEngine;
 using Sign;
@@ -9,134 +7,56 @@ using Snowball;
 using TMPro;
 using UniHumanoid;
 using Unity.VisualScripting;
-using UnityEngine.Serialization;
 using UnityEngine.UI;
-using Whisper;
-using Whisper.Utils;
-using Debug = UnityEngine.Debug;
 
 public class IsyaratNya : MonoBehaviour
 {
-    [Header("Frames")]
+    [Header("Sign")]
     private SignFrame _currentSign;
     public string signName;
     private Frame _currentFrame;
     private FrameData _rData;
     private FrameData _lData;
+    
+    [Header("Frames")]
     public int frameIdx = 0;
     public int frameCount;
+    [Range(0f, 1f)] public float midPoint;
+    [Range(0f, 1f)] public float sharpness;
+    public float gaussian;
     
     [Header("Humanoid")]
     private Humanoid _humanoid;
-    private Hum _rHum;
-    private Hum _lHum;
+    private HumanoidController _humanoidController;
     
     [Header("RotationTarget")]
-    private FrameRotation _rRotation;
-    private FrameRotation _lRotation;
-
+    private BodyRotation _bodyRotation;
+    private SideRotation _rSideRotation;
+    private SideRotation _lSideRotation;
+    
     [Header("States")]
     private bool _inGesture = false;
-    [Range(0.5f, 2f)] public float signDuration;
+    [Range(0.2f, 3f)] public float signDuration;
     public float frameDuration;
     public float t;
-    private float _t;
-
-    [Header("Whisper")]
-    public WhisperManager whisper;
-    public MicrophoneRecord microphone;
-    private string _buffer;
-    public bool streamSegments;
     
-    [Header("Snowball")]
-    private IndonesianStemmer _stemmer;
+    [Header("Parse")]
+    private Parser _parser;
+    private Queue<string> _signQueue;
+    
     
     [Header("UI")]
-    public Button record;
-    public TMP_Text recordText;
     public Button enter;
     public TMP_InputField input;
-
-    void Awake()
-    {
-        InitWhisper();
-    }
-
-    void InitWhisper()
-    {
-        whisper.OnNewSegment += OnNewSegment;
-            
-        microphone.OnRecordStop += OnRecordStop;
-            
-        record.onClick.AddListener(OnRecordButtonPressed);
-        enter.onClick.AddListener(OnEnterButtonPressed);
-    }
-
-    private void OnEnterButtonPressed()
-    {
-        if (input.text == "") return;
-        
-        signName = input.text.Split(" ")[0];
-        
-        StartGesture();
-    }
-    
-    private void OnRecordButtonPressed()
-    {
-        if (!microphone.IsRecording)
-        {
-            microphone.StartRecord();
-            recordText.text = "Stop";
-        }
-        else
-        {
-            microphone.StopRecord();
-            recordText.text = "Record Voice / Rekam Suara";
-        }
-    }
-    
-    private async void OnRecordStop(AudioChunk recordedAudio)
-    {
-        recordText.text = "Record Voice / Rekam Suara";
-        _buffer = "";
-            
-        var res = await whisper.GetTextAsync(recordedAudio.Data, recordedAudio.Frequency, recordedAudio.Channels);
-        if (res == null) 
-            return;
-
-        var text = res.Result;
-        
-        input.text = text;
-    }
-    
-    private void OnNewSegment(WhisperSegment segment)
-    {
-        if (!streamSegments)
-            return;
-
-        _buffer += segment.Text;
-        input.text = _buffer;
-    }
+    public Slider slider;
     
     void Start()
     {
         InitHumanoid();
         InitRotation();
-        LoadJson();
-        t = 10f;
-    }
-    
-    private void InitHumanoid()
-    {
-        _humanoid = transform.parent.GetComponent<Humanoid>();
-        _rHum = new Hum(_humanoid, Side.Right);
-        _lHum = new Hum(_humanoid, Side.Left);
-    }
-    
-    private void InitRotation()
-    {
-        _rRotation = new FrameRotation(Side.Right);
-        _lRotation = new FrameRotation(Side.Left);
+        enter.onClick.AddListener(OnEnterButtonPressed);
+        slider.onValueChanged.AddListener(OnSliderValueChanged);
+        _parser = new Parser();
     }
     
     void LateUpdate()
@@ -144,11 +64,39 @@ public class IsyaratNya : MonoBehaviour
         RenderFrame();
     }
     
+    #region init
+    private void InitHumanoid()
+    {
+        _humanoid = transform.parent.GetComponent<Humanoid>();
+        _humanoidController = new HumanoidController(
+            new BodyController(_humanoid), 
+            new SideController(_humanoid, Side.Right), 
+            new SideController(_humanoid, Side.Left));
+    }
+    private void InitRotation()
+    {
+        t = 8;
+        gaussian = 0.5f;
+        _bodyRotation = new BodyRotation();
+        _rSideRotation = new SideRotation(Side.Right);
+        _lSideRotation = new SideRotation(Side.Left);
+    }
+    private void OnEnterButtonPressed()
+    {
+        if (input.text == "" || _inGesture) return;
+        
+        _signQueue = _parser.Parse(input.text);
+        
+        StartGesture();
+    }
+    private void OnSliderValueChanged(float value) => signDuration = value;
+    #endregion
+
+    #region gesture
     private void LoadJson()
     {
-        string filePath = Path.Combine(Application.streamingAssetsPath, "Frames", signName + ".json");
-        string jsonData = File.ReadAllText(filePath);
-        _currentSign = JsonUtility.FromJson<SignFrame>(jsonData);
+        var filePath = Resources.Load<TextAsset>("Frames/" + signName);
+        _currentSign = JsonUtility.FromJson<SignFrame>(filePath.text);
         frameCount = _currentSign.f.Length;
         frameDuration = signDuration / frameCount;
         
@@ -157,14 +105,12 @@ public class IsyaratNya : MonoBehaviour
         _rData = _currentFrame.r;
         _lData = _currentFrame.l;
     }
-    
-    
-    #region gesture
     private void StartGesture()
     {
         if (_inGesture) return;
+        
+        signName = _signQueue.Dequeue();
         LoadJson();
-
         StartCoroutine(Gesture());
     }
 
@@ -174,28 +120,47 @@ public class IsyaratNya : MonoBehaviour
         frameIdx = 0;
         StopCoroutine(Gesture());
     }
+
+    private void InvokeGesture()
+    {
+        _inGesture = true;
+        while (_inGesture && frameIdx < frameCount)
+        {
+            Invoke(nameof(InvokeFrame), frameDuration);
+        }
+        _inGesture = false;
+        if (_signQueue.Count > 0)
+        {
+            StartGesture();
+        }
+    }
+
+    private void InvokeFrame()
+    {
+        LoadFrame();
+        UpdateRotation();
+        IterFrame();
+    }
     
     private IEnumerator Gesture()
     {
         _inGesture = true;
-
         while (_inGesture && frameIdx < frameCount)
         {
             LoadFrame();
-            UpdateTarget();
-            
+            UpdateRotation();
             IterFrame();
-            
-            yield return new WaitForSeconds(frameDuration);
+            yield return new WaitForSecondsRealtime(frameDuration);
         }
         _inGesture = false;
+        if (_signQueue.Count > 0)
+        {
+            StartGesture();
+        }
     }
     #endregion
     
-
-
     #region frame
-
     private void LoadFrame()
     {
         _currentFrame = _currentSign.f[frameIdx];
@@ -207,25 +172,24 @@ public class IsyaratNya : MonoBehaviour
         _lData = _currentFrame.l;
         _lData.SetSide(Side.Left);
     }
-
-    private void UpdateTarget()
+    private void UpdateRotation()
     {
-        _rRotation.UpdateRotation(_rData);
-        _lRotation.UpdateRotation(_lData);
+        _bodyRotation.UpdateRotation(_rData, _lData);
+        _rSideRotation.UpdateRotation(_rData);
+        _lSideRotation.UpdateRotation(_lData);
     }
-    
+    private void GaussianCurve()
+    {
+        var x = Mathf.Clamp01((float)frameIdx / frameCount);
+        gaussian = Mathf.Exp(-Mathf.Pow(x - midPoint, 2) / (2 * sharpness * sharpness));
+        t = (gaussian * 7f) + 1f;
+    }
     private void RenderFrame()
     {
-        _t = Time.deltaTime * t;
-        _rHum.UpdateHum(_rRotation, _t);
-        _lHum.UpdateHum(_lRotation, _t);
+        if (_inGesture) GaussianCurve(); else t = 6;
+        _humanoidController.Update(_bodyRotation, _rSideRotation, _lSideRotation, Time.deltaTime * t, _inGesture);
     }
-    
-    private void IterFrame(bool next = true)
-    {
-        frameIdx += next ? 1 : -1;
-    }
-    
+    private void IterFrame(bool next = true) => frameIdx += next ? 1 : -1;
     #endregion
     
     
